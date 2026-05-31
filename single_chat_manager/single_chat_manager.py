@@ -48,7 +48,7 @@ class ChatResult:
     timed_out: bool = False
     error: Optional[str] = None
     processed_msgs: list = field(default_factory=list)  # [(sender_name, text, reply_text), ...]
-    last_bot_msg_id: str = ''  # 本轮最后一条 bot 发出的消息 ID，用于退出时打 Bye 表情
+    last_bot_msg_id: str = ''  # 本轮最后一条 bot 发出的消息 ID，用于退出时打 SLEEP 表情
 
 
 @dataclass
@@ -400,16 +400,16 @@ class SingleChatManager:
           3. 写入 PPPC 文件
           4. 发 /new 触发 OpenClaw 原生日记 hook
         """
-        # 先给最后一条 bot 回复打 Bye 表情
+        # 先给最后一条 bot 回复打 SLEEP 表情
         if self._result.last_bot_msg_id:
-            br = self._mgr.react(self._result.last_bot_msg_id, emoji="OK")
+            br = self._mgr.react(self._result.last_bot_msg_id, emoji="SLEEP")
             if br.get("code") != 0:
                 _log_line(
-                    f"⚠️  退出 Bye 表情失败: {br.get('msg', '')}",
+                    f"⚠️  退出 SLEEP 表情失败: {br.get('msg', '')}",
                     c, self._log_file,
                 )
             else:
-                _log_line(f"✅ 给最后一条回复打了 OK 表情", c, self._log_file)
+                _log_line(f"💤 给最后一条回复打了 SLEEP 表情", c, self._log_file)
 
         if self._result.message_count <= 0:
             return
