@@ -262,17 +262,22 @@ class SingleChatManager:
     def _build_context_prefix(self, c: Candidate) -> str:
         """构建 init 阶段的前情提要。
 
-        包含四部分：
-          1. 对话对象身份说明
+        包含：
+          1. 对话对象身份说明 + 语气指导
           2. 提示使用 memory_search 搜索原生日记
           3. 对方发送的文件已自动保存到本地（如有文件目录）
-          4. PPPC 中的原始对话记录
+          4. 发送文件工具 CLI 说明
+          5. PPPC 中的原始对话记录
         """
         assert c.sender_name, f"sender {c.sender_id} 必须有名"
         name = c.sender_name
 
         parts = [
             f"你正在与 {name} 对话，请用 {name} 称呼对方。",
+            "",
+            f"用自然、有礼貌的语气和 {name} 聊天，像朋友一样。",
+            f"说话简短但完整，每次只表达一个主要观点。不要用列表或枚举。",
+            f"不知道的事就直说不知道，不要猜测。",
             "",
             "你可以使用 memory_search 搜索近期的原生日记作为补充背景信息。",
         ]
