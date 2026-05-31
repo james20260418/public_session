@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
-from util.feishu import (get_token, send_text_message, _request,
+from util.feishu import (get_token, send_text_message, _build_post_content, _request,
                           react_message, delete_reaction, get_reactions,
                           download_resource)
 
@@ -248,7 +248,7 @@ class MessageManager:
         return send_text_message(open_id, token, text)
 
     def send_text_to_chat(self, chat_id: str, text: str) -> dict:
-        content = json.dumps({"text": text})
+        content = _build_post_content(text)
         token = get_token(self._app_id, self._app_secret)
         if not token:
             return {"code": -1, "msg": "token failed"}
@@ -256,7 +256,7 @@ class MessageManager:
             "/im/v1/messages?receive_id_type=chat_id",
             token=token,
             method="POST",
-            body={"receive_id": chat_id, "msg_type": "text", "content": content},
+            body={"receive_id": chat_id, "msg_type": "post", "content": content},
         )
 
     def react(self, message_id: str, emoji: str = "Done") -> dict:
