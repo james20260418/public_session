@@ -287,6 +287,19 @@ class SingleChatManager:
                 f"如有需要，可以读取这些文件来获取信息。",
             ])
 
+        # 发送文件工具说明
+        send_file_script = os.path.join(
+            self._workspace_root, "util", "send_file.py")
+        if os.path.exists(send_file_script):
+            parts.extend([
+                "",
+                f"[可用工具] 你可以通过以下命令发送文件给 {name}：",
+                f"  python -m util.send_file <open_id> <file_path>",
+                f"  其中 open_id 是对方的 open_id: {c.sender_id}",
+                f"  支持常见文档、图片、音视频、压缩包等格式。",
+                f"  示例：python -m util.send_file {c.sender_id} /path/to/file.pdf",
+            ])
+
         raw = _read_pppc_files(self._workspace_root, c.sender_id)
         if raw:
             parts.extend([
