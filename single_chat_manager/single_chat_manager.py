@@ -27,7 +27,7 @@ from util.openclaw import generate_reply
 
 # ── 常量 ────────────────────────────────────────────────────────────────
 
-_IDLE_TIMEOUT = 120         # 120 秒无回复超时（agent 可能调工具等较久）
+_IDLE_TIMEOUT = 300         # 300 秒（5 分钟）无回复超时
 _POLL_INTERVAL = 0.5        # 轮询间隔 0.5 秒
 _DEBOUNCE_SECONDS = 1       # 发现新消息后等 1 秒再处理
 _LOG_ID_TRIM = 18           # 日志中 message_id 截断长度
@@ -48,6 +48,7 @@ class ChatResult:
     timed_out: bool = False
     error: Optional[str] = None
     processed_msgs: list = field(default_factory=list)  # [(sender_name, text, reply_text), ...]
+    last_bot_msg_id: str = ''  # 本轮最后一条 bot 发出的消息 ID，用于退出时打 SLEEP 表情
 
 
 @dataclass
@@ -399,6 +400,17 @@ class SingleChatManager:
           3. 写入 PPPC 文件
           4. 发 /new 触发 OpenClaw 原生日记 hook
         """
+        # 先给最后一条 bot 回复打 SLEEP 表情
+        if self._result.last_bot_msg_id:
+            br = self._mgr.react(self._result.last_bot_msg_id, emoji="SLEEP")
+            if br.get("code") != 0:
+                _log_line(
+                    f"⚠️  退出 SLEEP 表情失败: {br.get('msg', '')}",
+                    c, self._log_file,
+                )
+            else:
+                _log_line(f"💤 给最后一条回复打了 SLEEP 表情", c, self._log_file)
+
         if self._result.message_count <= 0:
             return
 
@@ -585,9 +597,13 @@ class SingleChatManager:
                 c, self._log_file,
             )
         else:
+            self._result.last_bot_msg_id = (
+                reply_result.get("data", {}).get("message_id", "")
+            )
             preview = reply_text[:10].replace("\n", " ")
             _log_line(
-                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_text)}chars]",
+                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_text)}chars]"
+                f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
                 c, self._log_file,
             )
 
