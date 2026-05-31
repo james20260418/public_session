@@ -86,27 +86,36 @@ def list_messages(chat_id, token, page_size=20):
     )
 
 
+def _build_post_content(text: str) -> str:
+    """用 post + md tag 包装文本，支持 markdown 渲染。"""
+    return json.dumps({
+        "zh_cn": {
+            "content": [[{"tag": "md", "text": text}]],
+        }
+    })
+
+
 def reply_message(msg_id, token, text):
-    """回复消息"""
-    content = json.dumps({"text": text})
+    """回复消息（post 格式，支持 markdown 渲染）"""
+    content = _build_post_content(text)
     return _request(
         f"/im/v1/messages/{msg_id}/reply",
         token=token,
         method="POST",
-        body={"content": content, "msg_type": "text"},
+        body={"content": content, "msg_type": "post"},
     )
 
 
 def send_text_message(open_id, token, text):
-    """发送文本消息给指定用户"""
-    content = json.dumps({"text": text})
+    """发送文本消息给指定用户（post 格式，支持 markdown 渲染）"""
+    content = _build_post_content(text)
     return _request(
         "/im/v1/messages?receive_id_type=open_id",
         token=token,
         method="POST",
         body={
             "receive_id": open_id,
-            "msg_type": "text",
+            "msg_type": "post",
             "content": content,
         },
     )
