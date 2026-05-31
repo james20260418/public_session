@@ -402,14 +402,14 @@ class SingleChatManager:
         """
         # 先给最后一条 bot 回复打 Bye 表情
         if self._result.last_bot_msg_id:
-            br = self._mgr.react(self._result.last_bot_msg_id, emoji="Bye")
+            br = self._mgr.react(self._result.last_bot_msg_id, emoji="OK")
             if br.get("code") != 0:
                 _log_line(
                     f"⚠️  退出 Bye 表情失败: {br.get('msg', '')}",
                     c, self._log_file,
                 )
             else:
-                _log_line(f"👋 给最后一条回复打了 Bye 表情", c, self._log_file)
+                _log_line(f"✅ 给最后一条回复打了 OK 表情", c, self._log_file)
 
         if self._result.message_count <= 0:
             return
