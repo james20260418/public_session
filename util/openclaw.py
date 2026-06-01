@@ -11,6 +11,7 @@
 """
 
 import json
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -83,6 +84,70 @@ def generate_reply(
     if result is None:
         return None
     return result.full_text if result.full_text else None
+
+
+# ── Session 清理 ──────────────────────────────────────────────────────────
+
+def delete_session(session_key: str):
+    """删除指定 session key 对应的 transcript 文件和 sessions.json 中的索引。
+
+    Args:
+        session_key: session key（如 agent:main:explicit:public-session-xxx），
+                     或 session key 的后半部分（如 public-session-xxx）。
+
+    用途:
+        SCM 用完临时 session 后清理，不残留脏状态。
+    """
+    if not session_key:
+        return
+
+    agents_dir = os.path.expanduser("~/.openclaw/agents")
+    if not os.path.isdir(agents_dir):
+        return
+
+    for agent_name in os.listdir(agents_dir):
+        store_path = os.path.join(agents_dir, agent_name, "sessions", "sessions.json")
+        if not os.path.exists(store_path):
+            continue
+
+        try:
+            with open(store_path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        if not isinstance(data, dict):
+            continue
+
+        # 找到匹配的 session key
+        matched_key = None
+        matched_sid = None
+        for k in data:
+            if k == session_key or k.endswith(":" + session_key):
+                matched_key = k
+                matched_sid = data[k].get("sessionId", "")
+                break
+
+        if not matched_sid:
+            continue
+
+        # 删 transcript 文件
+        transcript_path = os.path.join(
+            os.path.dirname(store_path), f"{matched_sid}.jsonl")
+        if os.path.exists(transcript_path):
+            try:
+                os.remove(transcript_path)
+            except OSError:
+                pass
+
+        # 删索引
+        del data[matched_key]
+        try:
+            with open(store_path, "w") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+        return  # 删完就走，只处理一个 agent
 
 
 def _call_agent(
