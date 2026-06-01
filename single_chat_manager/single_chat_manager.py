@@ -320,9 +320,8 @@ class SingleChatManager:
             "",
             "[退出控制]",
             "如果你想结束本次对话，在回复末尾加上 [!END]。",
-            "如果你需要等待对方回复，在回复末尾加上 [!WAIT:N]，",
-            "  其中 N 是等待秒数（0~60），比如 [!WAIT:30] 表示等 30 秒。",
-            "  注意：等待时长尽量不要很长，会让对方久等。",
+            "如果你需要等待对方回复，在回复末尾加上 [!WAIT]。",
+            "  加 [!WAIT] 后，会话会等对方回复（最长 300 秒）。",
             "如果你不需要发送消息、直接结束，回复 [!SILENT]（这不礼貌，谨慎使用）。",
             "默认情况下（不写任何标识），会话会在你回复后立即结束。",
         ])
@@ -600,7 +599,7 @@ class SingleChatManager:
                 (msg.sender_name, msg.text, reply_to_send))
 
         # ── 3. SILENT：不发消息直接退出 ──
-        if pragma.wait_seconds == -1:
+        if pragma.silent:
             _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
             # 还是需要清理 typing 标记
             for msg in batch:
@@ -610,7 +609,17 @@ class SingleChatManager:
             _save_last_processed(self._config, lp)
             state.last_msg_id = batch[-1].message_id
             self._result.message_count += len(batch)
-            return  # 直接跳到 run() 循环末尾的 _finalize
+            # 标记退出让 run() 循环检测到退出
+            self._result.timed_out = True
+            return
+
+        # ── 6. exit_immediately 控制 ──
+        # exit_immediately=True: 让 run() 循环的下一次 idle check 触发立即退出
+        #   （last_activity = 0 使 idle 远超 _IDLE_TIMEOUT）
+        # exit_immediately=False: 不做处理，让 run() 循环自然走 idle timeout
+        if pragma.exit_immediately:
+            _log_line("🚪 [!END] 回复完成，准备立即退出", c, self._log_file)
+            state.last_activity = 0.0
 
         # ── 4. 通过飞书 bot 发送回复 ──
         token = self._token_provider.get()
@@ -655,23 +664,4 @@ class SingleChatManager:
         state.last_msg_id = last_msg.message_id
         self._result.message_count += len(batch)
 
-        # ── 6. 发后等待：如果 agent 指定了等待秒数 ──
-        if pragma.wait_seconds > 0:
-            _log_line(f"⏳ [!WAIT:{pragma.wait_seconds}] 等待 {pragma.wait_seconds}s 对方回复...",
-                      c, self._log_file)
-            wait_deadline = time.time() + pragma.wait_seconds
-            while time.time() < wait_deadline:
-                if self._should_stop():
-                    return
-                # 检查是否有新消息（poll snapshot）
-                new_msgs = self._poll_new_messages(c, state, time.time())
-                if new_msgs:
-                    _log_line(f"💬 等待期间收到新消息，继续对话",
-                              c, self._log_file)
-                    state.last_activity = time.time()
-                    self._process_batch(c, new_msgs, state)
-                    return  # _process_batch 递归后，由子调用控制退出
-                time.sleep(0.5)
 
-            _log_line(f"⏰ [!WAIT:{pragma.wait_seconds}] 等待超时，结束会话",
-                      c, self._log_file)
