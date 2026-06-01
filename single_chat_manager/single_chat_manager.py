@@ -57,6 +57,7 @@ class _SessionState:
     """运行时状态"""
     last_msg_id: str            # 已经处理到的消息 id
     last_activity: float        # 上次有消息被处理的时间戳
+    force_exit: bool = False    # True 时 run() 循环在下一次 idle check 退出
 
 
 # ── 日志 ────────────────────────────────────────────────────────────────
@@ -221,6 +222,7 @@ class SingleChatManager:
         state = _SessionState(
             last_msg_id=last_msg_id,
             last_activity=time.time(),
+            force_exit=False,
         )
 
         _log_line(f"📞 开始会话 (last={last_msg_id[:_LOG_ID_TRIM] or 'none'})",
@@ -242,7 +244,12 @@ class SingleChatManager:
                 self._process_batch(c, new_msgs, state)
                 continue
 
-            # 超时检查
+            # 超时检查或强制退出
+            if state.force_exit:
+                _log_line("🚪 显式退出（[!END] 或 [!SILENT]）",
+                          c, self._log_file)
+                self._result.timed_out = True
+                break
             idle = now - state.last_activity
             if idle >= _IDLE_TIMEOUT:
                 _log_line(f"⏱️  超时（{_IDLE_TIMEOUT}s 无消息）",
@@ -598,52 +605,39 @@ class SingleChatManager:
             self._result.processed_msgs.append(
                 (msg.sender_name, msg.text, reply_to_send))
 
-        # ── 3. SILENT：不发消息直接退出 ──
+        # ── 3. 设置退出标记 ──
         if pragma.silent:
             _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
-            # 还是需要清理 typing 标记
-            for msg in batch:
-                self._mgr.mark_done(msg.message_id)
-            lp = _load_last_processed(self._config)
-            lp[c.sender_id] = batch[-1].message_id
-            _save_last_processed(self._config, lp)
-            state.last_msg_id = batch[-1].message_id
-            self._result.message_count += len(batch)
-            # 标记退出让 run() 循环检测到退出
-            self._result.timed_out = True
-            return
-
-        # ── 6. exit_immediately 控制 ──
-        # exit_immediately=True: 让 run() 循环的下一次 idle check 触发立即退出
-        #   （last_activity = 0 使 idle 远超 _IDLE_TIMEOUT）
-        # exit_immediately=False: 不做处理，让 run() 循环自然走 idle timeout
-        if pragma.exit_immediately:
+            state.force_exit = True
+        elif pragma.exit_immediately:
             _log_line("🚪 [!END] 回复完成，准备立即退出", c, self._log_file)
-            state.last_activity = 0.0
-
-        # ── 4. 通过飞书 bot 发送回复 ──
-        token = self._token_provider.get()
-        if not token:
-            _log_line("⚠️  无 token，跳过回复", c, self._log_file)
-            return
-
-        reply_result = self._mgr.send_text(c.sender_id, reply_to_send)
-        if reply_result.get("code") != 0:
-            _log_line(
-                f"⚠️  发送回复给 {c.sender_name} 失败: "
-                f"{reply_result.get('msg', '')}",
-                c, self._log_file,
-            )
+            state.force_exit = True
         else:
-            self._result.last_bot_msg_id = (
-                reply_result.get("data", {}).get("message_id", "")
-            )
-            preview = reply_to_send[:10].replace("\n", " ")
-            _log_line(
-                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_to_send)}chars]"
-                f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
-                c, self._log_file,
-            )
+            _log_line("⏳ [!WAIT] 发送后等待对方回复", c, self._log_file)
+
+        # ── 4. 发送回复（SILENT 跳过）──
+        if not pragma.silent:
+            token = self._token_provider.get()
+            if not token:
+                _log_line("⚠️  无 token，跳过回复", c, self._log_file)
+            else:
+                reply_result = self._mgr.send_text(c.sender_id, reply_to_send)
+                if reply_result.get("code") != 0:
+                    _log_line(
+                        f"⚠️  发送回复给 {c.sender_name} 失败: "
+                        f"{reply_result.get('msg', '')}",
+                        c, self._log_file,
+                    )
+                else:
+                    self._result.last_bot_msg_id = (
+                        reply_result.get("data", {}).get("message_id", "")
+                    )
+                    preview = reply_to_send[:10].replace("\n", " ")
+                    _log_line(
+                        f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_to_send)}chars]"
+                        f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
+                        c, self._log_file,
+                    )
 
         # ── 5. batch 处理完成，把所有 typing indicator 换成 Done ──
         for msg in batch:
