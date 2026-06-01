@@ -247,7 +247,7 @@ class SingleChatManager:
 
             # 超时检查或强制退出
             if state.force_exit:
-                _log_line("🚪 显式退出（[!END] 或 [!SILENT]）",
+                _log_line("🚪 显式退出（[!SILENT]）",
                           c, self._log_file)
                 self._result.timed_out = True
                 break
@@ -327,7 +327,7 @@ class SingleChatManager:
         parts.extend([
             "",
             "[退出控制]",
-            "- 如果你想结束本次对话，在回复末尾加上 [!END]。",
+
             "- 如果你不需要发送消息、直接结束，回复 [!SILENT]（这不礼貌，谨慎使用）。",
             "- 默认情况下（不写任何标识），会话会等待对方回复（最长 300 秒）。",
         ])
@@ -613,9 +613,6 @@ class SingleChatManager:
             _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
             state.force_exit = True
             self._result.last_user_msg_id = batch[-1].message_id
-        elif pragma.exit_immediately:
-            _log_line("🚪 [!END] 回复完成，准备立即退出", c, self._log_file)
-            state.force_exit = True
         else:
             _log_line("⏳ [!WAIT] 发送后等待对方回复", c, self._log_file)
 

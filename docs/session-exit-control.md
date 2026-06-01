@@ -12,18 +12,17 @@ Agent 在回复文本中嵌入以下标识，Python 侧解析并执行：
 
 | 标识 | 含义 | Python 行为 |
 |------|------|------------|
-| `[!WAIT]` | 回复后等对方回复（默认行为） | `exit_immediately=False`，不做处理，走 idle timeout（300 秒）|
+| `[!WAIT]` | 回复后等对方回复（默认行为） | 走 idle timeout（300 秒）|
 | `[!SILENT]` | 不发送回复就结束 | 不调 `send_text`，直接退出 |
 | 无标识 | 正常等待 | 走 idle timeout |
 
 ## Python 解析逻辑 (`util/exit_pragma.py`)
 
-```python
-def parse_exit_pragma(reply: str) -> ExitPragma:
-    # 扫描回复最后 200 字符
-    # 匹配优先级：SILENT > WAIT > END > 默认(立即退出)
-    # 返回 (clean_reply, exit_immediately, silent)
-```
+优先级：SILENT > WAIT > 默认(WAIT)
+
+- `[!SILENT]` → `clean_reply=""`, `silent=True`
+- `[!WAIT]` → 清除标识，`silent=False`
+- 无标识 → 同 WAIT
 
 ## 退出流程图
 
@@ -31,18 +30,14 @@ def parse_exit_pragma(reply: str) -> ExitPragma:
 _process_batch 开始
   │
   ├─ 收消息 → 加 Typing → 调 OpenClaw → reply
-  ├─ 解析标识 → (clean_reply, exit_immediately, silent)
+  ├─ 解析标识 → (clean_reply, silent)
   │
-  ├─ silent=True → 不发消息，直接退出
+  ├─ silent=True  → 不打 SLEEP（等 finalize 打），不发消息
+  │   ├─ 打 Done → 更新 last_processed
+  │   └─ state.force_exit=True → run() 循环退出
   │
-  ├─ 发 clean_reply → 打 Done → 更新 last_processed
-  │
-  ├─ exit_immediately=True → last_activity = 0
-  │    → run() 循环下一个 idle check 命中 → 退出
-  │
-  └─ exit_immediately=False = [!WAIT]
-       → last_activity 保持当前时间
-       → run() 循环自然走 idle timeout (300s)
+  └─ silent=False → 发 clean_reply → 打 Done → 更新 last_processed
+       └─ 返回 run() 循环，走 idle timeout
 ```
 
 ## 架构影响
