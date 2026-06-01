@@ -50,6 +50,7 @@ class ChatResult:
     error: Optional[str] = None
     processed_msgs: list = field(default_factory=list)  # [(sender_name, text, reply_text), ...]
     last_bot_msg_id: str = ''  # 本轮最后一条 bot 发出的消息 ID，用于退出时打 SLEEP 表情
+    last_user_msg_id: str = ''  # 本轮最后一条用户消息的 message_id（SILENT 时用于打 SLEEP）
 
 
 @dataclass
@@ -412,13 +413,17 @@ class SingleChatManager:
 
         流程：
           1. message_count == 0 → 直接返回
-          2. 将 processed_msgs 格式化为原始对话文本，截取最近 ~1000 chars
-          3. 写入 PPPC 文件
-          4. 发 /new 触发 OpenClaw 原生日记 hook
+          2. 先给最后一条消息打 SLEEP 表情
+             - 优先 bot 回复（有 last_bot_msg_id）
+             - SILENT 退出时 bot 没发消息，给用户最后一条消息打（last_user_msg_id）
+          3. 将 processed_msgs 格式化为原始对话文本
+          4. 写入 PPPC 文件
+          5. 发 /new 触发 OpenClaw 原生日记 hook
         """
-        # 先给最后一条 bot 回复打 SLEEP 表情
-        if self._result.last_bot_msg_id:
-            br = self._mgr.react(self._result.last_bot_msg_id, emoji="SLEEP")
+        # 先给最后一条消息打 SLEEP 表情
+        sleep_msg_id = self._result.last_bot_msg_id or self._result.last_user_msg_id
+        if sleep_msg_id:
+            br = self._mgr.react(sleep_msg_id, emoji="SLEEP")
             if br.get("code") != 0:
                 _log_line(
                     f"⚠️  退出 SLEEP 表情失败: {br.get('msg', '')}",
@@ -607,6 +612,7 @@ class SingleChatManager:
         if pragma.silent:
             _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
             state.force_exit = True
+            self._result.last_user_msg_id = batch[-1].message_id
         elif pragma.exit_immediately:
             _log_line("🚪 [!END] 回复完成，准备立即退出", c, self._log_file)
             state.force_exit = True
