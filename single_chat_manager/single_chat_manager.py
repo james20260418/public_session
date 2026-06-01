@@ -24,6 +24,7 @@ from config import CachedTokenProvider
 from message_manager import Message, MessageManager
 from scheduler import Candidate
 from util.openclaw import generate_reply
+from util.exit_pragma import parse_exit_pragma
 
 # ── 常量 ────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ class ChatResult:
     error: Optional[str] = None
     processed_msgs: list = field(default_factory=list)  # [(sender_name, text, reply_text), ...]
     last_bot_msg_id: str = ''  # 本轮最后一条 bot 发出的消息 ID，用于退出时打 SLEEP 表情
+    silent_last_user_msg_id: str = ''  # 本轮最后一条用户消息的 message_id（SILENT 时用于打 SLEEP）
 
 
 @dataclass
@@ -56,6 +58,7 @@ class _SessionState:
     """运行时状态"""
     last_msg_id: str            # 已经处理到的消息 id
     last_activity: float        # 上次有消息被处理的时间戳
+    force_exit: bool = False    # True 时 run() 循环在下一次 idle check 退出
 
 
 # ── 日志 ────────────────────────────────────────────────────────────────
@@ -220,6 +223,7 @@ class SingleChatManager:
         state = _SessionState(
             last_msg_id=last_msg_id,
             last_activity=time.time(),
+            force_exit=False,
         )
 
         _log_line(f"📞 开始会话 (last={last_msg_id[:_LOG_ID_TRIM] or 'none'})",
@@ -241,7 +245,12 @@ class SingleChatManager:
                 self._process_batch(c, new_msgs, state)
                 continue
 
-            # 超时检查
+            # 超时检查或强制退出
+            if state.force_exit:
+                _log_line("🚪 显式退出（[!SILENT]）",
+                          c, self._log_file)
+                self._result.timed_out = True
+                break
             idle = now - state.last_activity
             if idle >= _IDLE_TIMEOUT:
                 _log_line(f"⏱️  超时（{_IDLE_TIMEOUT}s 无消息）",
@@ -314,6 +323,14 @@ class SingleChatManager:
                 raw.strip(),
                 f"[/之前的对话记录]",
             ])
+
+        parts.extend([
+            "",
+            "[退出控制]",
+
+            "- 如果你不需要发送消息、直接结束，回复 [!SILENT]（这不礼貌，谨慎使用）。",
+            "- 默认情况下（不写任何标识），会话会等待对方回复（最长 300 秒）。",
+        ])
 
         return "\n".join(parts)
 
@@ -396,13 +413,17 @@ class SingleChatManager:
 
         流程：
           1. message_count == 0 → 直接返回
-          2. 将 processed_msgs 格式化为原始对话文本，截取最近 ~1000 chars
-          3. 写入 PPPC 文件
-          4. 发 /new 触发 OpenClaw 原生日记 hook
+          2. 先给最后一条消息打 SLEEP 表情
+             - 优先 bot 回复（有 last_bot_msg_id）
+             - SILENT 退出时 bot 没发消息，给用户最后一条消息打（silent_last_user_msg_id）
+          3. 将 processed_msgs 格式化为原始对话文本
+          4. 写入 PPPC 文件
+          5. 发 /new 触发 OpenClaw 原生日记 hook
         """
-        # 先给最后一条 bot 回复打 SLEEP 表情
-        if self._result.last_bot_msg_id:
-            br = self._mgr.react(self._result.last_bot_msg_id, emoji="SLEEP")
+        # 先给最后一条消息打 SLEEP 表情
+        sleep_msg_id = self._result.silent_last_user_msg_id or self._result.last_bot_msg_id
+        if sleep_msg_id:
+            br = self._mgr.react(sleep_msg_id, emoji="SLEEP")
             if br.get("code") != 0:
                 _log_line(
                     f"⚠️  退出 SLEEP 表情失败: {br.get('msg', '')}",
@@ -578,36 +599,48 @@ class SingleChatManager:
         _log_line(f"🤖 OpenClaw 回复: {reply_text[:40]}... [{len(reply_text)}chars]",
                   c, self._log_file)
 
-        # ── 记录到 processed_msgs ──
+        # ── 解析退出标识 ──
+        pragma = parse_exit_pragma(reply_text)
+        reply_to_send = pragma.clean_reply
+
+        # 记录到 processed_msgs（用纯净回复，不含标识）
         for msg in batch:
             self._result.processed_msgs.append(
-                (msg.sender_name, msg.text, reply_text))
+                (msg.sender_name, msg.text, reply_to_send))
 
-        # ── 3. 通过飞书 bot 发送回复 ──
-        token = self._token_provider.get()
-        if not token:
-            _log_line("⚠️  无 token，跳过回复", c, self._log_file)
-            return
-
-        reply_result = self._mgr.send_text(c.sender_id, reply_text)
-        if reply_result.get("code") != 0:
-            _log_line(
-                f"⚠️  发送回复给 {c.sender_name} 失败: "
-                f"{reply_result.get('msg', '')}",
-                c, self._log_file,
-            )
+        # ── 3. 设置退出标记 ──
+        if pragma.silent:
+            _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
+            state.force_exit = True
+            self._result.silent_last_user_msg_id = batch[-1].message_id
         else:
-            self._result.last_bot_msg_id = (
-                reply_result.get("data", {}).get("message_id", "")
-            )
-            preview = reply_text[:10].replace("\n", " ")
-            _log_line(
-                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_text)}chars]"
-                f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
-                c, self._log_file,
-            )
+            _log_line("⏳ [!WAIT] 发送后等待对方回复", c, self._log_file)
 
-        # ── 4. batch 处理完成，把所有 typing indicator 换成 Done ──
+        # ── 4. 发送回复（SILENT 跳过）──
+        if not pragma.silent:
+            token = self._token_provider.get()
+            if not token:
+                _log_line("⚠️  无 token，跳过回复", c, self._log_file)
+            else:
+                reply_result = self._mgr.send_text(c.sender_id, reply_to_send)
+                if reply_result.get("code") != 0:
+                    _log_line(
+                        f"⚠️  发送回复给 {c.sender_name} 失败: "
+                        f"{reply_result.get('msg', '')}",
+                        c, self._log_file,
+                    )
+                else:
+                    self._result.last_bot_msg_id = (
+                        reply_result.get("data", {}).get("message_id", "")
+                    )
+                    preview = reply_to_send[:10].replace("\n", " ")
+                    _log_line(
+                        f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_to_send)}chars]"
+                        f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
+                        c, self._log_file,
+                    )
+
+        # ── 5. batch 处理完成，把所有 typing indicator 换成 Done ──
         for msg in batch:
             dr = self._mgr.mark_done(msg.message_id)
             if dr.get("code") != 0:
@@ -624,5 +657,6 @@ class SingleChatManager:
         _save_last_processed(self._config, lp)
 
         state.last_msg_id = last_msg.message_id
-
         self._result.message_count += len(batch)
+
+
