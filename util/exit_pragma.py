@@ -68,8 +68,7 @@ def parse_exit_pragma(reply: str) -> ExitPragma:
 
     # 优先级 1：SILENT — 不发送消息直接退出
     if "[!SILENT]" in tail:
-        clean = reply.replace("[!SILENT]", "")
-        return ExitPragma(clean.strip(), exit_immediately=True, silent=True)
+        return ExitPragma("", exit_immediately=True, silent=True)
 
     # 优先级 2：WAIT — 进入等回复模式
     if "[!WAIT]" in tail:
