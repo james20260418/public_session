@@ -24,6 +24,7 @@ from config import CachedTokenProvider
 from message_manager import Message, MessageManager
 from scheduler import Candidate
 from util.openclaw import generate_reply
+from util.exit_pragma import parse_exit_pragma
 
 # ── 常量 ────────────────────────────────────────────────────────────────
 
@@ -315,6 +316,17 @@ class SingleChatManager:
                 f"[/之前的对话记录]",
             ])
 
+        parts.extend([
+            "",
+            "[退出控制]",
+            "如果你想结束本次对话，在回复末尾加上 [!END]。",
+            "如果你需要等待对方回复，在回复末尾加上 [!WAIT:N]，",
+            "  其中 N 是等待秒数（0~60），比如 [!WAIT:30] 表示等 30 秒。",
+            "  注意：等待时长尽量不要很长，会让对方久等。",
+            "如果你不需要发送消息、直接结束，回复 [!SILENT]（这不礼貌，谨慎使用）。",
+            "默认情况下（不写任何标识），会话会在你回复后立即结束。",
+        ])
+
         return "\n".join(parts)
 
     # ── PPPC 辅助（纯函数）──
@@ -578,18 +590,35 @@ class SingleChatManager:
         _log_line(f"🤖 OpenClaw 回复: {reply_text[:40]}... [{len(reply_text)}chars]",
                   c, self._log_file)
 
-        # ── 记录到 processed_msgs ──
+        # ── 解析退出标识 ──
+        pragma = parse_exit_pragma(reply_text)
+        reply_to_send = pragma.clean_reply
+
+        # 记录到 processed_msgs（用纯净回复，不含标识）
         for msg in batch:
             self._result.processed_msgs.append(
-                (msg.sender_name, msg.text, reply_text))
+                (msg.sender_name, msg.text, reply_to_send))
 
-        # ── 3. 通过飞书 bot 发送回复 ──
+        # ── 3. SILENT：不发消息直接退出 ──
+        if pragma.wait_seconds == -1:
+            _log_line("🔇 [!SILENT] 不发送消息，直接结束", c, self._log_file)
+            # 还是需要清理 typing 标记
+            for msg in batch:
+                self._mgr.mark_done(msg.message_id)
+            lp = _load_last_processed(self._config)
+            lp[c.sender_id] = batch[-1].message_id
+            _save_last_processed(self._config, lp)
+            state.last_msg_id = batch[-1].message_id
+            self._result.message_count += len(batch)
+            return  # 直接跳到 run() 循环末尾的 _finalize
+
+        # ── 4. 通过飞书 bot 发送回复 ──
         token = self._token_provider.get()
         if not token:
             _log_line("⚠️  无 token，跳过回复", c, self._log_file)
             return
 
-        reply_result = self._mgr.send_text(c.sender_id, reply_text)
+        reply_result = self._mgr.send_text(c.sender_id, reply_to_send)
         if reply_result.get("code") != 0:
             _log_line(
                 f"⚠️  发送回复给 {c.sender_name} 失败: "
@@ -600,14 +629,14 @@ class SingleChatManager:
             self._result.last_bot_msg_id = (
                 reply_result.get("data", {}).get("message_id", "")
             )
-            preview = reply_text[:10].replace("\n", " ")
+            preview = reply_to_send[:10].replace("\n", " ")
             _log_line(
-                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_text)}chars]"
+                f"✅ 已发送回复给 {c.sender_name}: {preview}... [{len(reply_to_send)}chars]"
                 f" (msg_id={self._result.last_bot_msg_id[:_LOG_ID_TRIM]})",
                 c, self._log_file,
             )
 
-        # ── 4. batch 处理完成，把所有 typing indicator 换成 Done ──
+        # ── 5. batch 处理完成，把所有 typing indicator 换成 Done ──
         for msg in batch:
             dr = self._mgr.mark_done(msg.message_id)
             if dr.get("code") != 0:
@@ -624,5 +653,25 @@ class SingleChatManager:
         _save_last_processed(self._config, lp)
 
         state.last_msg_id = last_msg.message_id
-
         self._result.message_count += len(batch)
+
+        # ── 6. 发后等待：如果 agent 指定了等待秒数 ──
+        if pragma.wait_seconds > 0:
+            _log_line(f"⏳ [!WAIT:{pragma.wait_seconds}] 等待 {pragma.wait_seconds}s 对方回复...",
+                      c, self._log_file)
+            wait_deadline = time.time() + pragma.wait_seconds
+            while time.time() < wait_deadline:
+                if self._should_stop():
+                    return
+                # 检查是否有新消息（poll snapshot）
+                new_msgs = self._poll_new_messages(c, state, time.time())
+                if new_msgs:
+                    _log_line(f"💬 等待期间收到新消息，继续对话",
+                              c, self._log_file)
+                    state.last_activity = time.time()
+                    self._process_batch(c, new_msgs, state)
+                    return  # _process_batch 递归后，由子调用控制退出
+                time.sleep(0.5)
+
+            _log_line(f"⏰ [!WAIT:{pragma.wait_seconds}] 等待超时，结束会话",
+                      c, self._log_file)
