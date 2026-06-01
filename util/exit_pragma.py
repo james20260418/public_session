@@ -75,10 +75,5 @@ def parse_exit_pragma(reply: str) -> ExitPragma:
         clean = reply.replace("[!WAIT]", "")
         return ExitPragma(clean.strip(), exit_immediately=False)
 
-    # 优先级 3：END — 立即退出
-    if "[!END]" in tail:
-        clean = reply.replace("[!END]", "")
-        return ExitPragma(clean.strip(), exit_immediately=True)
-
     # 默认：进入等待模式（走 idle timeout），由 agent 显式 [!END] 触发退出
     return ExitPragma(reply.strip(), exit_immediately=False)

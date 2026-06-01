@@ -12,32 +12,9 @@ Agent 在回复文本中嵌入以下标识，Python 侧解析并执行：
 
 | 标识 | 含义 | Python 行为 |
 |------|------|------------|
-| `[!END]` | 回复后立即结束 | `exit_immediately=True`，设置 `last_activity=0`，下一秒 idle check 触发退出 |
 | `[!WAIT]` | 回复后等对方回复（默认行为） | `exit_immediately=False`，不做处理，走 idle timeout（300 秒）|
 | `[!SILENT]` | 不发送回复就结束 | 不调 `send_text`，直接退出 |
-| 无标识 | 正常等待 | 视为 `[!WAIT]`，等 idle timeout |
-
-### 为什么需要 `[!WAIT]`
-
-在 PM-IC 场景中，PM 发完任务指令后可能需要等 IC 确认（"收到了"、"正在跑"）。
-如果 PM 发完就立即结束，IC 的确认消息会触发新的一轮 OneTick 调度，有短暂的重启开销。
-`[!WAIT]` 让 PM 留在会话中等待（但不等太久——300 秒 idle timeout 就是上限）。
-
-### 为什么 `[!WAIT]` 不带 N（等待秒数）
-
-300 秒的 idle timeout 已足够作为兜底。增加变长等待（N 秒）会增加 agent 的认知负担（"我该等多久"），
-且实际收益有限——`[!WAIT]` 只需表达"我等"，等多久交给系统。
-
-## 提示词引导
-
-在 `_build_context_prefix` 末尾追加以下指导：
-
-```
-[退出控制]
-- 如果你想结束本次对话，在回复末尾加上 [!END]。
-- 如果你不需要发送消息、直接结束，回复 [!SILENT]（这不礼貌，谨慎使用）。
-- 默认情况下（不写任何标识），会话会等待对方回复（最长 300 秒）。
-```
+| 无标识 | 正常等待 | 走 idle timeout |
 
 ## Python 解析逻辑 (`util/exit_pragma.py`)
 
