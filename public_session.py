@@ -22,8 +22,9 @@ from datetime import datetime, timezone, timedelta
 
 from config import Config, CachedTokenProvider, load as load_config
 from message_manager import MessageManager
-from scheduler import pick_candidate
-from single_chat_manager.single_chat_manager import SingleChatManager, _load_last_processed
+from scheduler import pick_candidate, Candidate
+from single_chat_manager.single_chat_manager import _load_last_processed
+from single_chat_manager.v2 import SingleChatManagerV2
 
 # ── 常量 ────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ def log(log_path, msg):
 def one_tick(config: Config, mgr: MessageManager, token_provider: CachedTokenProvider):
     """单次 tick 执行
 
-    检查是否有 sender 等待对话。如有，启动 SingleChatManager 阻塞处理。
+    检查是否有 sender 等待对话。如有，启动 SingleChatManagerV2 阻塞处理。
     处理完成后回到下一 tick。
 
     Args:
@@ -60,6 +61,7 @@ def one_tick(config: Config, mgr: MessageManager, token_provider: CachedTokenPro
         token_provider: 缓存 token 提供者
     """
     log_path = config.log_file
+    ws_root = os.path.dirname(os.path.expanduser(config.log_file)) if config.log_file else "."
     lp = _load_last_processed(config)
     candidate = pick_candidate(mgr, lp)
     if candidate is None:
@@ -67,15 +69,19 @@ def one_tick(config: Config, mgr: MessageManager, token_provider: CachedTokenPro
 
     log(log_path, f"🎯 选中 {candidate.sender_name}（等待 {candidate.wait_seconds:.0f}s）")
 
-    scm = SingleChatManager(config, mgr, token_provider, candidate)
-    result = scm.run()
+    scm = SingleChatManagerV2(
+        config=config,
+        message_manager=mgr,
+        ws_root=ws_root,
+        token_provider=token_provider,
+        log_file=config.log_file,
+        stop_file=os.path.expanduser(config.stop_file),
+    )
+    result = scm.run(candidate)
 
     suffix = "，超时" if result.timed_out else ""
     log(log_path, f"📞 会话结束: {candidate.sender_name} "
                   f"({result.message_count} 条消息{suffix})")
-
-    if result.error:
-        log(log_path, f"⚠️  {result.error}")
 
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
